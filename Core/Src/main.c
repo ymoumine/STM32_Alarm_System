@@ -51,8 +51,10 @@ I2C_HandleTypeDef hi2c1;
 
 UART_HandleTypeDef huart2;
 
+osThreadId myDefaultTaskHandle;
 osThreadId myTask02Handle;
 osThreadId myTask03Handle;
+osThreadId myTask04Handle;
 osMessageQId myQueue01Handle;
 /* USER CODE BEGIN PV */
 extern char key;
@@ -64,20 +66,14 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_I2C1_Init(void);
+void StartDefaultTask(void const *argument);
 void StartTask02(void const *argument);
 void StartTask03(void const *argument);
+void StartTask04(void const *argument);
 
+int buzzer = 0;
+int movement = 0;
 int armed = 0;
-int initial = 1;
-
-const uint8_t maxbufferIndex = 6;
-const uint8_t minbufferIndex = 4;
-
-char inputKey;
-uint8_t bufferIndex = 0;
-
-char inputCode[7] = { 0 };
-char correctCode[7] = { 0 };
 
 /* USER CODE BEGIN PFP */
 
@@ -122,12 +118,13 @@ int main(void) {
 	SSD1306_Init();
 	SSD1306_GotoXY(0, 0);
 	//SSD1306_Puts ("Voltage:", &Font_11x18, 1);
-	SSD1306_Puts("Not Armed!", &Font_11x18, 1);
+	SSD1306_Puts("Set Code!", &Font_11x18, 1);
+	HAL_UART_Transmit(&huart2, (uint8_t *)"Set Code!\r\n", 11, 100);
 	SSD1306_GotoXY(0, 30);
+	HAL_UART_Transmit(&huart2, (uint8_t *)"Code:", 5, 100);
 	SSD1306_Puts("Code:", &Font_11x18, 1);
 	SSD1306_UpdateScreen();
-	SSD1306_UpdateScreen();
-	HAL_Delay(500);
+	//HAL_Delay(500);
 
 	/* USER CODE END 2 */
 
@@ -155,6 +152,9 @@ int main(void) {
 	/* Create the thread(s) */
 	/* definition and creation of defaultTask */
 
+	osThreadDef(defaultTask, StartDefaultTask, osPriorityAboveNormal, 0, 128);
+	myDefaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
 	/* definition and creation of myTask02 */
 	osThreadDef(myTask02, StartTask02, osPriorityAboveNormal, 0, 128);
 	myTask02Handle = osThreadCreate(osThread(myTask02), NULL);
@@ -164,6 +164,8 @@ int main(void) {
 	myTask03Handle = osThreadCreate(osThread(myTask03), NULL);
 
 	/* USER CODE BEGIN RTOS_THREADS */
+	osThreadDef(myTask04, StartTask04, osPriorityAboveNormal, 0, 128);
+	myTask04Handle = osThreadCreate(osThread(myTask04), NULL);
 	/* add threads, ... */
 	/* USER CODE END RTOS_THREADS */
 
@@ -303,13 +305,18 @@ static void MX_GPIO_Init(void) {
 	__HAL_RCC_GPIOB_CLK_ENABLE();
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
 
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_15, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOB, KC0_Pin | KC3_Pin | KC1_Pin | KC2_Pin,
 			GPIO_PIN_RESET);
+
+	/*Configure GPIO pin : PA5 */
+	GPIO_InitStruct.Pin = GPIO_PIN_15;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+		HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : PA5 */
 	GPIO_InitStruct.Pin = GPIO_PIN_5;
@@ -362,6 +369,26 @@ static void MX_GPIO_Init(void) {
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+void StartDefaultTask(void const *argument) {
+	/* USER CODE BEGIN 5 */
+	/* Infinite loop */
+	for (;;) {
+		if (armed && buzzer) {
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, SET); // activate the buzzer
+			osDelay(100);
+
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, RESET); // Stop the buzzer
+			osDelay(100);
+		} else {
+			// Ensure buzzer is off when system is not armed or no buzzer
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, RESET);
+			osDelay(100);
+		}
+
+		osDelay(100);
+	}
+	/* USER CODE END 5 */
+}
 
 /* USER CODE BEGIN Header_StartTask02 */
 /**
@@ -373,99 +400,124 @@ static void MX_GPIO_Init(void) {
 void StartTask02(void const *argument) {
 	/* USER CODE BEGIN StartTask02 */
 	/* Infinite loop */
+	char receivedKey;
+	char enteredCode[7] = { 0 }; // Array to store the entered code, assuming max length + 1 for null terminator
+	uint8_t codeLength = 0; // To track the number of entered characters
+	 uint8_t maxCodeLength = 6; // Adjust based on your requirements
+	 uint8_t minCodeLength = 4;
+	 char correctCode[7] = { 0 }; // Example of a correct code for comparison
+int initial = 1;
 
 	for (;;) {
-
-		if (initial == 1) {
-			// Display initial setup message on OLED
-			SSD1306_Clear();
-			SSD1306_GotoXY(0, 0); // Adjust based on your display size and font
-			SSD1306_Puts("Entrer Code:", &Font_11x18, 1);
-			SSD1306_UpdateScreen();
-		}
 
 		if (armed) {
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, SET);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, RESET);
-			osDelay(2000);
+			//osDelay(2000);
 		} else {
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, SET);
 			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, RESET);
 		}
 
-		if (xQueueReceive(myQueue01Handle, &inputKey,
-		portMAX_DELAY) == pdPASS) {
-			if (inputKey == '#' && bufferIndex > minbufferIndex) { // Enter code
+		if(initial){
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, RESET);
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, SET);
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, SET);
+		}
 
-				if (initial == 1) {
+		if (xQueueReceive(myQueue01Handle, &receivedKey,
+				portMAX_DELAY) == pdPASS) {
+			if (receivedKey == '#' && codeLength >= minCodeLength && initial) { // Enter/confirm key or max length reached
+				// Check if the entered code is correct
+				strncpy(correctCode, enteredCode, sizeof(correctCode));
 
-					strncpy(correctCode, inputCode, sizeof(correctCode));
+				SSD1306_Clear();
+				SSD1306_GotoXY(0, 0);
+				HAL_UART_Transmit(&huart2, (uint8_t *)"Code Set\r\n", 10, 100);
+				SSD1306_Puts("Code Set", &Font_11x18, 1);
+				SSD1306_UpdateScreen();
 
+				HAL_Delay(2000);
+
+				// MIGHT NEED TO REMOVE THIS
+				armed = 1;
+
+				SSD1306_Clear();
+								SSD1306_GotoXY(0, 0);
+									SSD1306_Puts("Armed!", &Font_11x18, 1);
+									HAL_UART_Transmit(&huart2, (uint8_t *)"Armed!\r\n", 8, 100);
+								SSD1306_GotoXY(0, 30); // Adjust Y position based on your font size
+								HAL_UART_Transmit(&huart2, (uint8_t *)"Code:", 5, 100);
+								SSD1306_Puts("Code:", &Font_11x18, 1);
+
+								// REMOVE END HERE
+
+				memset(enteredCode, 0, sizeof(enteredCode));
+				codeLength = 0;
+
+
+				initial = 0;
+			}
+
+				else if (receivedKey == '#' && codeLength >= minCodeLength && !initial) { // Enter/confirm key or max length reached
+				// Check if the entered code is correct
+				if (strncmp(enteredCode, correctCode, maxCodeLength) == 0) {
+					// Code is correct
 					SSD1306_Clear();
 					SSD1306_GotoXY(0, 0);
-					SSD1306_Puts("Code Set", &Font_11x18, 1);
-					SSD1306_UpdateScreen();
+					SSD1306_Puts("Success!", &Font_11x18, 1);
 
-					// osDelay(2000);
-					armed = 1;
+					HAL_UART_Transmit(&huart2, (uint8_t *)"Success!\r\n", 10, 100);
 
-					memset(inputCode, 0, sizeof(inputCode)); // Clear code
-					bufferIndex = 0;
-
-					initial = 0;
-				} else {
-
-					// Check code
-					if (strncmp(inputCode, correctCode, maxbufferIndex) == 0
-							&& initial == 0) {
-						SSD1306_Clear();
-						SSD1306_GotoXY(0, 0);
-						SSD1306_Puts("Correct!", &Font_11x18, 1);
-						if (armed) {
-							armed = 0;
-						} else {
-							armed = 1;
-						}
+					if (armed) {
+						armed = 0;
 					} else {
-						SSD1306_Clear();
-						SSD1306_GotoXY(0, 0);
-						SSD1306_Puts("Erreur!", &Font_11x18, 1);
+						armed = 1;
 					}
-					SSD1306_UpdateScreen();
+				} else {
+					// Code is incorrect
+					SSD1306_Clear();
+					SSD1306_GotoXY(0, 0);
+					SSD1306_Puts("Failed!", &Font_11x18, 1);
+					HAL_UART_Transmit(&huart2, (uint8_t *)"Failed!\r\n", 9, 100);
+					buzzer= 1;
+
 				}
+				SSD1306_UpdateScreen();
 				HAL_Delay(2000); // Display message for 2 seconds
 
 				// Reset display and code length for next entry
 				SSD1306_Clear();
 				SSD1306_GotoXY(0, 0);
 				if (armed) {
-					SSD1306_Puts("Armee", &Font_11x18, 1);
+					SSD1306_Puts("Armed!", &Font_11x18, 1);
+					HAL_UART_Transmit(&huart2, (uint8_t *)"Armed!\r\n", 8, 100);
 
 				} else {
-					SSD1306_Puts("Non Armee", &Font_11x18, 1);
+					SSD1306_Puts("Not Armed!", &Font_11x18, 1);
+					HAL_UART_Transmit(&huart2, (uint8_t *)"Not Armed!\r\n", 12, 100);
 
 				}
 				SSD1306_GotoXY(0, 30); // Adjust Y position based on your font size
+				HAL_UART_Transmit(&huart2, (uint8_t *)"Code:", 5, 100);
 				SSD1306_Puts("Code:", &Font_11x18, 1);
 				SSD1306_UpdateScreen();
-
-				memset(inputCode, 0, sizeof(inputCode)); // Clear the entered code
-				bufferIndex = 0;
-
+				memset(enteredCode, 0, sizeof(enteredCode)); // Clear the entered code
+				codeLength = 0;
 			} else {
 				// Add received key to the entered code and update display with an additional asterisk
-				if (bufferIndex < maxbufferIndex) { // Prevent buffer overflow
-					inputCode[bufferIndex] = inputKey; // Store the received key
-					//SSD1306_GotoXY ((bufferIndex * 5), 30); // Adjust spacing based on font size
+				if (codeLength < maxCodeLength) { // Prevent buffer overflow
+					enteredCode[codeLength] = receivedKey; // Store the received key
+					//SSD1306_GotoXY ((codeLength * 5), 30); // Adjust spacing based on font size
 					SSD1306_Puts("*", &Font_11x18, 1);
+					HAL_UART_Transmit(&huart2, (uint8_t *)"*", 1, 100);
 					SSD1306_UpdateScreen();
-					bufferIndex++;
+					codeLength++;
 					// Might  wait here? HAL_Delay (500);
 				} else {
-					printf("Erreur!");
+					printf("Error: Max Code Length Reached!\r\n");
 				}
 			}
-
 		}
 	}
 
@@ -488,6 +540,38 @@ void StartTask03(void const *argument) {
 		vTaskDelay(xDelay); // Wait for the next cycle
 	}
 	/* USER CODE END StartTask02 */
+}
+
+void StartTask04(void const *argument) {
+	/* USER CODE BEGIN StartTask04 */
+	/* Infinite loop */
+	GPIO_PinState pirState;
+	/* Infinite loop */
+	for (;;) {
+
+		pirState = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_15);
+
+
+		if (pirState == GPIO_PIN_SET && armed) {
+
+			HAL_UART_Transmit(&huart2, (uint8_t *)"Movement\r\n", 13, 100);
+			buzzer = 1;
+
+		} else {
+
+			if(armed){
+				//pirState = GPIO_PIN_RESET;
+				HAL_UART_Transmit(&huart2, (uint8_t *)"No Movement\r\n", 13, 100);
+			}
+
+			buzzer = 0; // No buzzer
+		}
+
+
+
+		osDelay(100); // Check every 100ms
+	}
+	/* USER CODE END StartTask04 */
 }
 
 /* USER CODE BEGIN Header_StartTask03 */
@@ -543,7 +627,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: printf("Wrong parameters value: file %s on line %d\r\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
